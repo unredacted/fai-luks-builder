@@ -7,7 +7,7 @@ FAI_DEBOOTSTRAP="TEMPLATED_RELEASE http://deb.debian.org/debian"
 
 # Packages to include in the nfsroot (the install environment, NOT the target).
 # These are needed so setup-storage can create LUKS/LVM during installation.
-NFSROOT_PACKAGES="cryptsetup lvm2 e2fsprogs dosfstools efibootmgr grub-efi-amd64-bin parted hdparm"
+NFSROOT_PACKAGES="cryptsetup lvm2 e2fsprogs dosfstools efibootmgr TEMPLATED_GRUB_EFI_PKG parted hdparm"
 
 # Where to build the nfsroot
 NFSROOT=/srv/fai/nfsroot

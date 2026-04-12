@@ -11,6 +11,7 @@
 #   --skip-mirror        Skip fai-mirror (reuse existing mirror)
 #   --clean              Remove all build artifacts and cached data, then exit
 #   --dry-run            Validate config and show what would be built, then exit
+#   --arch ARCH          Target architecture: amd64 (default) or arm64
 #   --no-docker          Run natively even on macOS (used internally by Docker)
 #
 # Copyright (c) 2026 — Licensed under the GNU General Public License v3.
@@ -41,6 +42,7 @@ NC='\033[0m' # No Color
 
 CONFIG_FILE="./build.yaml"
 OUTPUT_OVERRIDE=""
+TARGET_ARCH="amd64"  # Target ISO architecture (amd64 or arm64)
 VERBOSE=0
 SKIP_SETUP=0
 SKIP_MIRROR=0
@@ -66,6 +68,7 @@ Options:
   --skip-mirror        Skip fai-mirror (reuse existing mirror)
   --clean              Remove all build artifacts and cached data, then exit
   --dry-run            Validate config and show what would be built, then exit
+  --arch ARCH          Target architecture: amd64 (default) or arm64
   --no-docker          Run natively (used internally by Docker entrypoint)
 
 Examples:
@@ -153,6 +156,10 @@ parse_args() {
                 NO_DOCKER=1
                 shift
                 ;;
+            --arch)
+                TARGET_ARCH="$2"
+                shift 2
+                ;;
             *)
                 log_fatal "Unknown option: $1\nRun './build.sh --help' for usage."
                 ;;
@@ -222,16 +229,21 @@ run_in_docker() {
     output_dir="$(cd "$(dirname "${OUTPUT_OVERRIDE:-./output/fai.iso}")" && pwd)"
     mkdir -p "$output_dir"
 
-    # Build the Docker image (only if Dockerfile changed)
+    # Map target arch to Docker platform
+    local docker_platform="linux/${TARGET_ARCH}"
+    echo -e "  Target architecture: ${TARGET_ARCH} (platform: ${docker_platform})"
+
+    # Build the Docker image for the target platform
     local dockerfile_hash
     dockerfile_hash="$(md5 -q "$REPO_ROOT/Dockerfile" 2>/dev/null || md5sum "$REPO_ROOT/Dockerfile" | cut -d' ' -f1)"
     echo -e "  Building Docker image (hash: ${dockerfile_hash:0:8})..."
-    docker build -t fai-luks-builder "$REPO_ROOT"
+    docker build --platform "$docker_platform" -t "fai-luks-builder:${TARGET_ARCH}" "$REPO_ROOT"
 
     # Construct docker run arguments
     local -a docker_args=(
         --rm
         --privileged
+        --platform "$docker_platform"
         --tmpfs /tmp:exec
         -v "${CONFIG_FILE}:/workspace/build.yaml:ro"
         -v "${output_dir}:/output"
@@ -271,8 +283,10 @@ run_in_docker() {
     local output_basename
     output_basename="$(basename "${OUTPUT_OVERRIDE:-fai-luks.iso}")"
 
+    passthrough+=(--arch "$TARGET_ARCH")
+
     echo -e "  Starting container..."
-    docker run "${docker_args[@]}" fai-luks-builder \
+    docker run "${docker_args[@]}" "fai-luks-builder:${TARGET_ARCH}" \
         --config /workspace/build.yaml \
         --output "/output/${output_basename}" \
         "${passthrough[@]}"
@@ -539,9 +553,16 @@ write_fai_config() {
     log_info "Wrote /etc/fai/fai.conf"
 
     cp "$REPO_ROOT/templates/nfsroot.conf.tpl" /etc/fai/nfsroot.conf
-    # Inject the release codename into nfsroot.conf (it's outside the config space)
+    # Inject the release codename and arch-specific GRUB package into nfsroot.conf
     template_replace "TEMPLATED_RELEASE" "$BUILD_RELEASE" /etc/fai/nfsroot.conf
-    log_info "Wrote /etc/fai/nfsroot.conf (release: $BUILD_RELEASE)"
+    local grub_efi_pkg
+    case "$TARGET_ARCH" in
+        amd64) grub_efi_pkg="grub-efi-amd64-bin" ;;
+        arm64) grub_efi_pkg="grub-efi-arm64-bin" ;;
+        *)     log_fatal "Unsupported architecture: $TARGET_ARCH" ;;
+    esac
+    template_replace "TEMPLATED_GRUB_EFI_PKG" "$grub_efi_pkg" /etc/fai/nfsroot.conf
+    log_info "Wrote /etc/fai/nfsroot.conf (release: $BUILD_RELEASE, grub: $grub_efi_pkg)"
 
     # Enable FAI repo in the nfsroot apt sources
     if [ -f /etc/fai/apt/sources.list ]; then
@@ -703,6 +724,11 @@ assemble_config_space() {
     chmod 600 "$config_dir/.luks_passphrase"
     log_info "LUKS passphrase written to config space"
 
+    # Derive arch class name (amd64 → AMD64, arm64 → ARM64)
+    local arch_class
+    arch_class="$(echo "$TARGET_ARCH" | tr '[:lower:]' '[:upper:]')"
+
+    template_replace_all "TEMPLATED_ARCH_CLASS"            "$arch_class"                  "$config_dir"
     template_replace_all "TEMPLATED_RELEASE_CLASS"         "$BUILD_RELEASE_CLASS"         "$config_dir"
     template_replace_all "TEMPLATED_RELEASE"               "$BUILD_RELEASE"               "$config_dir"
     template_replace_all "TEMPLATED_ADMIN_USER"            "$BUILD_ADMIN_USER"            "$config_dir"
@@ -944,6 +970,7 @@ do_dry_run() {
     echo "  timezone:          $BUILD_TIMEZONE"
     echo "  locale:            $BUILD_LOCALE"
     echo "  keyboard:          $BUILD_KEYBOARD"
+    echo "  target_arch:       $TARGET_ARCH"
     echo "  disk_device:       $BUILD_DISK_DEVICE"
     echo "  efi_size:          $BUILD_EFI_SIZE"
     echo "  boot_size:         $BUILD_BOOT_SIZE"
@@ -976,7 +1003,9 @@ do_dry_run() {
     done
 
     echo -e "\n${BOLD}Final class list:${NC}"
-    echo "  DEFAULT LINUX AMD64 DHCPC FAIBASE DEBIAN ${BUILD_RELEASE_CLASS} GRUB_EFI LUKS_SERVER CUSTOM_SETUP LAST"
+    local arch_class_dry
+    arch_class_dry="$(echo "$TARGET_ARCH" | tr '[:lower:]' '[:upper:]')"
+    echo "  DEFAULT LINUX ${arch_class_dry} DHCPC FAIBASE DEBIAN ${BUILD_RELEASE_CLASS} GRUB_EFI LUKS_SERVER CUSTOM_SETUP LAST"
 
     echo -e "\n${GREEN}${BOLD}Dry run complete — config is valid.${NC}"
     exit 0
