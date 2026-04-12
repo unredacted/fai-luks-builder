@@ -475,6 +475,9 @@ parse_and_validate() {
         log_info "Admin password: hashed with SHA-512"
     fi
 
+    # Derive uppercase release class name (e.g., trixie → TRIXIE)
+    BUILD_RELEASE_CLASS="$(echo "$BUILD_RELEASE" | tr '[:lower:]' '[:upper:]')"
+
     log_info "All values resolved"
 }
 
@@ -683,9 +686,6 @@ assemble_config_space() {
     printf '%s' "$BUILD_LUKS_PASSPHRASE" > "$config_dir/.luks_passphrase"
     chmod 600 "$config_dir/.luks_passphrase"
     log_info "LUKS passphrase written to config space"
-
-    # Derive uppercase release class name (e.g., trixie → TRIXIE)
-    BUILD_RELEASE_CLASS="$(echo "$BUILD_RELEASE" | tr '[:lower:]' '[:upper:]')"
 
     template_replace_all "TEMPLATED_RELEASE_CLASS"         "$BUILD_RELEASE_CLASS"         "$config_dir"
     template_replace_all "TEMPLATED_RELEASE"               "$BUILD_RELEASE"               "$config_dir"
