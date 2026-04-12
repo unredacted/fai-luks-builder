@@ -927,18 +927,23 @@ build_mirror() {
     # Build the partial mirror
     # -b: skip nfsroot package list comparison (safer for ISO builds)
     # -v: verbose output
+    # -c: explicit class list — without this, fai-mirror resolves ALL classes
+    #     from the config space (including upstream ones like GRUB_PC, LIVEISO,
+    #     I386, etc.) which causes conflicts (grub-pc vs grub-efi).
+    local arch_class
+    arch_class="$(echo "$TARGET_ARCH" | tr '[:lower:]' '[:upper:]')"
+    local mirror_classes="FAIBASE,DEBIAN,${arch_class},GRUB_EFI,LUKS_SERVER,CUSTOM_SETUP,LAST"
+
     log_info "Running fai-mirror (this takes several minutes)..."
     local mirror_exit=0
     if [ $VERBOSE -eq 1 ]; then
-        fai-mirror -bv "$MIRROR_DIR" 2>&1 | tee "$LOG_DIR/fai-mirror.log" || mirror_exit=${PIPESTATUS[0]}
+        fai-mirror -bv -c"$mirror_classes" "$MIRROR_DIR" 2>&1 | tee "$LOG_DIR/fai-mirror.log" || mirror_exit=${PIPESTATUS[0]}
     else
-        fai-mirror -bv "$MIRROR_DIR" > "$LOG_DIR/fai-mirror.log" 2>&1 || mirror_exit=$?
+        fai-mirror -bv -c"$mirror_classes" "$MIRROR_DIR" > "$LOG_DIR/fai-mirror.log" 2>&1 || mirror_exit=$?
     fi
 
     if [ "$mirror_exit" -ne 0 ]; then
-        log_warn "fai-mirror exited with code $mirror_exit, retrying with explicit class list..."
-        fai-mirror -bv -cFAIBASE,DEBIAN,AMD64,GRUB_EFI,LUKS_SERVER,CUSTOM_SETUP,LAST "$MIRROR_DIR" > "$LOG_DIR/fai-mirror-retry.log" 2>&1 || \
-            log_fatal "fai-mirror failed.\nCheck: $LOG_DIR/fai-mirror.log and $LOG_DIR/fai-mirror-retry.log"
+        log_fatal "fai-mirror failed (exit $mirror_exit).\nCheck: $LOG_DIR/fai-mirror.log"
     fi
 
     # Verify mirror contents
