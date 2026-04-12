@@ -1,0 +1,61 @@
+#! /bin/bash
+set -e
+
+# Custom setup script: user account, SSH keys, hostname, hardening.
+# Runs during the FAI "configure" task for the CUSTOM_SETUP class.
+
+# --- User account ---
+USERNAME="TEMPLATED_ADMIN_USER"
+$ROOTCMD useradd -m -s /bin/bash -c "${USERNAME}" "${USERNAME}" 2>/dev/null || true
+# Use usermod to set the pre-hashed password — avoids bash expanding $6$... in the hash
+$ROOTCMD usermod --password 'TEMPLATED_ADMIN_PASSWORD_HASH' "${USERNAME}"
+echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > $target/etc/sudoers.d/${USERNAME}
+chmod 440 $target/etc/sudoers.d/${USERNAME}
+
+# --- SSH keys ---
+mkdir -p $target/home/${USERNAME}/.ssh
+chmod 700 $target/home/${USERNAME}/.ssh
+
+cat > $target/home/${USERNAME}/.ssh/authorized_keys << 'SSHEOF'
+TEMPLATED_SSH_PUBLIC_KEY
+SSHEOF
+
+chmod 600 $target/home/${USERNAME}/.ssh/authorized_keys
+$ROOTCMD chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.ssh
+
+# Root SSH key too (for emergency access)
+mkdir -p $target/root/.ssh
+chmod 700 $target/root/.ssh
+cp $target/home/${USERNAME}/.ssh/authorized_keys $target/root/.ssh/
+chmod 600 $target/root/.ssh/authorized_keys
+
+# --- SSH hardening ---
+cat > $target/etc/ssh/sshd_config.d/hardened.conf << 'SSHCONF'
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+PubkeyAuthentication yes
+X11Forwarding no
+MaxAuthTries 3
+SSHCONF
+
+# --- Locale ---
+echo "TEMPLATED_LOCALE UTF-8" > $target/etc/locale.gen
+$ROOTCMD locale-gen
+echo "LANG=TEMPLATED_LOCALE" > $target/etc/default/locale
+
+# --- Timezone ---
+$ROOTCMD ln -sf /usr/share/zoneinfo/TEMPLATED_TIMEZONE /etc/localtime
+echo "TEMPLATED_TIMEZONE" > $target/etc/timezone
+
+# --- Hostname ---
+TEMPLATED_HOST_MAP
+
+echo "$THIS_HOSTNAME" > $target/etc/hostname
+cat > $target/etc/hosts << HOSTS
+127.0.0.1   localhost
+127.0.1.1   $THIS_HOSTNAME
+
+::1         localhost ip6-localhost ip6-loopback
+ff02::1     ip6-allnodes
+ff02::2     ip6-allrouters
+HOSTS

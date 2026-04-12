@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck on build.sh
+        run: shellcheck -x -s bash -e SC2034 build.sh
+      - name: Syntax check
+        run: bash -n build.sh
+
+  dry-run:
+    name: Dry run (config validation)
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
+      options: --privileged
+    steps:
+      - name: Install git for checkout
+        run: apt-get update -qq && apt-get install -y -qq git wget ca-certificates
+
+      - uses: actions/checkout@v4
+
+      - name: Prepare test config
+        run: |
+          cp build.yaml.example build.yaml
+          # Use a literal SSH key so validation passes without GitHub API call
+          sed -i 's/^ssh_key_github:.*/# ssh_key_github:/' build.yaml
+          echo 'ssh_key_literal: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyForCIOnly test@ci"' >> build.yaml
+
+      - name: Run --dry-run
+        run: ./build.sh --dry-run -v
+
+  docker-build:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t fai-luks-builder .
+      - name: Verify help output
+        run: docker run --rm fai-luks-builder --help
+
+  validate-bad-configs:
+    name: Rejects invalid configs
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
+      options: --privileged
+    steps:
+      - name: Install git for checkout
+        run: apt-get update -qq && apt-get install -y -qq git wget ca-certificates
+
+      - uses: actions/checkout@v4
+
+      - name: Bootstrap dependencies
+        run: |
+          # Run once to install FAI + yq (will fail on example config, that's fine)
+          cp build.yaml.example build.yaml
+          sed -i 's/^ssh_key_github:.*/# ssh_key_github:/' build.yaml
+          echo 'ssh_key_literal: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey test@ci"' >> build.yaml
+          ./build.sh --dry-run 2>/dev/null || true
+
+      - name: Reject empty passphrase
+        run: |
+          cp build.yaml.example build.yaml
+          sed -i 's/^ssh_key_github:.*/# ssh_key_github:/' build.yaml
+          echo 'ssh_key_literal: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey test@ci"' >> build.yaml
+          sed -i 's/^luks_passphrase:.*/luks_passphrase: ""/' build.yaml
+          ! ./build.sh --dry-run 2>&1
+
+      - name: Reject invalid MAC address
+        run: |
+          cp build.yaml.example build.yaml
+          sed -i 's/^ssh_key_github:.*/# ssh_key_github:/' build.yaml
+          echo 'ssh_key_literal: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey test@ci"' >> build.yaml
+          sed -i 's/0c:c4:7a:69:39:30/not-a-mac/' build.yaml
+          ! ./build.sh --dry-run 2>&1
+
+      - name: Reject multiple SSH key sources
+        run: |
+          cp build.yaml.example build.yaml
+          echo 'ssh_key_literal: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey test@ci"' >> build.yaml
+          ! ./build.sh --dry-run 2>&1
+
+      - name: Reject short password
+        run: |
+          cp build.yaml.example build.yaml
+          sed -i 's/^ssh_key_github:.*/# ssh_key_github:/' build.yaml
+          echo 'ssh_key_literal: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey test@ci"' >> build.yaml
+          sed -i 's/^admin_password:.*/admin_password: "short"/' build.yaml
+          ! ./build.sh --dry-run 2>&1

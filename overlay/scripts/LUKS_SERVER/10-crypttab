@@ -1,0 +1,28 @@
+#! /bin/bash
+set -e
+
+# Configure crypttab and GRUB for LUKS boot on the installed system.
+# This runs during the FAI "configure" task for the LUKS_SERVER class.
+
+# Find the LUKS partition and its UUID
+LUKS_DEV=$(blkid -t TYPE=crypto_LUKS -o device | head -1)
+if [ -z "$LUKS_DEV" ]; then
+    echo "ERROR: No LUKS device found"
+    exit 1
+fi
+LUKS_UUID=$(blkid -s UUID -o value "$LUKS_DEV")
+
+# Configure crypttab — tells the initramfs to prompt for LUKS passphrase
+echo "crypt_disk UUID=${LUKS_UUID} none luks,discard" > $target/etc/crypttab
+
+# Configure GRUB for LUKS
+cat >> $target/etc/default/grub << EOF
+
+# LUKS support (added by fai-luks-builder)
+GRUB_ENABLE_CRYPTODISK=y
+GRUB_CMDLINE_LINUX="cryptdevice=UUID=${LUKS_UUID}:crypt_disk"
+EOF
+
+# Rebuild initramfs with cryptsetup support and update GRUB
+$ROOTCMD update-initramfs -u -k all
+$ROOTCMD update-grub

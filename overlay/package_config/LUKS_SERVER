@@ -1,0 +1,13 @@
+# Packages specific to LUKS-encrypted server installations.
+# Base system packages (openssh, sudo, locales, etc.) are already
+# provided by package_config/DEBIAN from upstream.
+
+PACKAGES install
+cryptsetup
+cryptsetup-initramfs
+lvm2
+ca-certificates
+net-tools
+man-db
+dbus
+TEMPLATED_EXTRA_PACKAGES

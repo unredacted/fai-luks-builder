@@ -1,0 +1,64 @@
+# fai-luks-builder configuration
+# Copy this file to build.yaml and customize for your environment.
+
+# --- Disk encryption ---
+luks_passphrase: "ChangeMe-After-Install-2026!"
+
+# --- User account ---
+admin_user: "admin"
+admin_password: "ChangeMeToo-2026!"
+# Can be plaintext (will be hashed) or pre-hashed SHA-512 ($6$...)
+
+# --- SSH access (exactly one required) ---
+ssh_key_github: "your-github-username"
+# ssh_key_url: "https://example.com/keys.pub"
+# ssh_key_file: "/path/to/id_ed25519.pub"
+# ssh_key_literal: "ssh-ed25519 AAAA... user@host"
+
+# --- Debian release ---
+# Debian codename: bookworm, trixie, forky, etc.
+release: "trixie"
+
+# --- System ---
+timezone: "UTC"
+locale: "en_US.UTF-8"
+keyboard: "us"
+
+# --- Disk ---
+# "auto" = FAI auto-detect (recommended). Or: "sda", "nvme0n1", "vda"
+disk_device: "auto"
+swap_size: 4         # Swap size in gigabytes
+efi_size: "512M"     # EFI System Partition size
+boot_size: "1G"      # /boot partition size
+root_size: "4G-"     # Root partition minimum (- = fill remaining space)
+
+# --- Network ---
+network: "dhcp"
+
+# --- Additional packages (space or newline separated) ---
+extra_packages: "htop tmux iotop rsync curl wget vim unattended-upgrades"
+
+# --- Hostname / host mapping (optional) ---
+# If hosts list is provided, hostname is set by MAC address match.
+# If omitted, all servers get default_hostname.
+default_hostname: "debian-server"
+hosts:
+  - hostname: server01
+    mac: "0c:c4:7a:69:39:30"
+  - hostname: server02
+    mac: "aa:bb:cc:dd:ee:01"
+  - hostname: server03
+    mac: "aa:bb:cc:dd:ee:02"
+  - hostname: server04
+    mac: "aa:bb:cc:dd:ee:03"
+  - hostname: server05
+    mac: "aa:bb:cc:dd:ee:04"
+  - hostname: server06
+    mac: "aa:bb:cc:dd:ee:05"
+
+# --- Post-install script (optional) ---
+# Path to a shell script to run at end of install inside the target chroot.
+# post_install_script: "./my-custom-setup.sh"
+
+# --- ISO output ---
+output: "./output/fai-luks.iso"

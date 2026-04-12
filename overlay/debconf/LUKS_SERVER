@@ -1,0 +1,4 @@
+locales locales/default_environment_locale select TEMPLATED_LOCALE
+locales locales/locales_to_be_generated multiselect TEMPLATED_LOCALE UTF-8
+keyboard-configuration keyboard-configuration/xkb-keymap select TEMPLATED_KEYBOARD
+keyboard-configuration keyboard-configuration/variant select English (US)

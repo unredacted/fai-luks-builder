@@ -1,0 +1,21 @@
+# Build outputs
+output/
+*.iso
+*.iso.sha256
+
+# Build artifacts (created at runtime)
+/tmp/fai-luks-builder/
+
+# User config (example is tracked, actual is not)
+build.yaml
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

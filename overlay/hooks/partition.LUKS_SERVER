@@ -1,0 +1,9 @@
+#! /bin/bash
+
+# Hook: partition.LUKS_SERVER
+# Runs before the partition task for LUKS_SERVER class.
+# Provides the LUKS passphrase to setup-storage.
+
+# The passphrase file is created by the build script during config assembly.
+# $FAI is set by FAI to the config space path.
+cp "$FAI/.luks_passphrase" /tmp/fai/crypt_password

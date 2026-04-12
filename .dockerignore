@@ -1,0 +1,6 @@
+output/
+.git/
+*.iso
+*.iso.sha256
+build.yaml
+.DS_Store

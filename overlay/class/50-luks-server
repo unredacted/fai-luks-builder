@@ -1,0 +1,10 @@
+#! /bin/bash
+
+# Define classes for LUKS-encrypted server installation.
+# This replaces the upstream 50-host-classes script.
+# Executed by fai-class — everything printed to stdout becomes a class.
+
+# do not use this if a menu will be presented
+[ "$flag_menu" ] && exit 0
+
+echo "FAIBASE DEBIAN TEMPLATED_RELEASE_CLASS AMD64 GRUB_EFI LUKS_SERVER CUSTOM_SETUP LAST"
