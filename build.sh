@@ -232,6 +232,7 @@ run_in_docker() {
     local -a docker_args=(
         --rm
         --privileged
+        --tmpfs /tmp:exec
         -v "${CONFIG_FILE}:/workspace/build.yaml:ro"
         -v "${output_dir}:/output"
     )
@@ -301,6 +302,15 @@ install_dependencies() {
         if ! command -v "$tool" &>/dev/null; then
             apt-get install -y -qq "$tool" > /dev/null
             log_info "Installed $tool"
+        fi
+    done
+
+    # dosfstools + mtools are needed by fai-cd to create the EFI boot image on the ISO
+    for pkg_cmd in "dosfstools:mkfs.vfat" "mtools:mcopy"; do
+        local pkg="${pkg_cmd%%:*}" cmd="${pkg_cmd##*:}"
+        if ! command -v "$cmd" &>/dev/null; then
+            apt-get install -y -qq "$pkg" > /dev/null
+            log_info "Installed $pkg"
         fi
     done
 
