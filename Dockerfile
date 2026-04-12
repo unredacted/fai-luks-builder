@@ -1,6 +1,6 @@
 FROM debian:trixie
 
-# Add FAI repository
+# Add FAI repository and install all dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         wget gnupg ca-certificates && \
@@ -10,15 +10,9 @@ RUN apt-get update && \
         > /etc/apt/sources.list.d/fai.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        fai-quickstart fai-doc git curl openssl && \
+        fai-quickstart fai-doc git curl openssl jq python3-yaml && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-
-# Install yq (Go-based YAML parser)
-RUN ARCH=$(dpkg --print-architecture) && \
-    wget -qO /usr/local/bin/yq \
-        "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${ARCH}" && \
-    chmod +x /usr/local/bin/yq
 
 WORKDIR /workspace
 COPY . /workspace/

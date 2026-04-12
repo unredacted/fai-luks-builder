@@ -63,7 +63,7 @@ jobs:
 
       - name: Bootstrap dependencies
         run: |
-          # Run once to install FAI + yq (will fail on example config, that's fine)
+          # Run once to install FAI + jq + python3-yaml (will fail on example config, that's fine)
           cp build.yaml.example build.yaml
           sed -i 's/^ssh_key_github:.*/# ssh_key_github:/' build.yaml
           echo 'ssh_key_literal: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey test@ci"' >> build.yaml

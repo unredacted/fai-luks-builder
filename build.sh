@@ -99,6 +99,10 @@ log_fatal() {
     exit 1
 }
 
+# Read a field from the parsed config JSON (set by parse_and_validate)
+CONFIG_JSON=""
+cfg() { echo "$CONFIG_JSON" | jq -r "$1"; }
+
 # Cleanup trap — only prints on failure
 cleanup() {
     local exit_code=$?
@@ -232,13 +236,17 @@ run_in_docker() {
         -v "${output_dir}:/output"
     )
 
-    # Read SSH key file path from config if present
-    # Use yq if available, fall back to awk for macOS where yq may not be installed
+    # Read file paths from config for Docker volume mounts
+    # Use python3+yaml→jq if available, fall back to awk for minimal macOS setups
     local ssh_key_file=""
     local post_script=""
-    if command -v yq &>/dev/null; then
-        ssh_key_file="$(yq -r '.ssh_key_file // empty' "$CONFIG_FILE" 2>/dev/null || true)"
-        post_script="$(yq -r '.post_install_script // empty' "$CONFIG_FILE" 2>/dev/null || true)"
+    if command -v python3 &>/dev/null && python3 -c 'import yaml' 2>/dev/null && command -v jq &>/dev/null; then
+        local _json
+        _json="$(python3 -c 'import yaml,json,sys; json.dump(yaml.safe_load(open(sys.argv[1])),sys.stdout)' "$CONFIG_FILE" 2>/dev/null || true)"
+        if [ -n "$_json" ]; then
+            ssh_key_file="$(echo "$_json" | jq -r '.ssh_key_file // empty')"
+            post_script="$(echo "$_json" | jq -r '.post_install_script // empty')"
+        fi
     else
         ssh_key_file="$(awk -F': *' '/^ssh_key_file:/{gsub(/["'"'"']/, "", $2); print $2}' "$CONFIG_FILE")"
         post_script="$(awk -F': *' '/^post_install_script:/{gsub(/["'"'"']/, "", $2); print $2}' "$CONFIG_FILE")"
@@ -288,26 +296,20 @@ install_dependencies() {
         log_info "FAI already installed"
     fi
 
-    # Install yq if not present
-    if ! command -v yq &>/dev/null; then
-        log_info "Installing yq..."
-        local arch
-        arch="$(dpkg --print-architecture)"
-        wget -qO /usr/local/bin/yq \
-            "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${arch}"
-        chmod +x /usr/local/bin/yq
-        log_info "yq installed"
-    else
-        log_info "yq already installed"
-    fi
-
     # Ensure other tools are available
-    for tool in curl git openssl; do
+    for tool in curl git openssl jq python3; do
         if ! command -v "$tool" &>/dev/null; then
             apt-get install -y -qq "$tool" > /dev/null
             log_info "Installed $tool"
         fi
     done
+
+    # python3-yaml is needed for YAML→JSON conversion
+    if ! python3 -c 'import yaml' 2>/dev/null; then
+        apt-get install -y -qq python3-yaml > /dev/null
+        log_info "Installed python3-yaml"
+    fi
+
     log_info "All dependencies satisfied"
 }
 
@@ -320,28 +322,32 @@ parse_and_validate() {
         log_fatal "Config file not found: $CONFIG_FILE\nCopy build.yaml.example to build.yaml and customize it."
     fi
 
+    # Convert YAML to JSON once, then use jq for all field access
+    CONFIG_JSON="$(python3 -c 'import yaml, json, sys; json.dump(yaml.safe_load(open(sys.argv[1])), sys.stdout)' "$CONFIG_FILE")" || \
+        log_fatal "Failed to parse YAML: $CONFIG_FILE"
+
     # Read all values
-    BUILD_LUKS_PASSPHRASE="$(yq -r '.luks_passphrase // empty' "$CONFIG_FILE")"
-    BUILD_ADMIN_USER="$(yq -r '.admin_user // empty' "$CONFIG_FILE")"
-    BUILD_ADMIN_PASSWORD="$(yq -r '.admin_password // empty' "$CONFIG_FILE")"
-    BUILD_SSH_KEY_GITHUB="$(yq -r '.ssh_key_github // empty' "$CONFIG_FILE")"
-    BUILD_SSH_KEY_URL="$(yq -r '.ssh_key_url // empty' "$CONFIG_FILE")"
-    BUILD_SSH_KEY_FILE="$(yq -r '.ssh_key_file // empty' "$CONFIG_FILE")"
-    BUILD_SSH_KEY_LITERAL="$(yq -r '.ssh_key_literal // empty' "$CONFIG_FILE")"
-    BUILD_RELEASE="$(yq -r '.release // "trixie"' "$CONFIG_FILE")"
-    BUILD_TIMEZONE="$(yq -r '.timezone // "UTC"' "$CONFIG_FILE")"
-    BUILD_LOCALE="$(yq -r '.locale // "en_US.UTF-8"' "$CONFIG_FILE")"
-    BUILD_KEYBOARD="$(yq -r '.keyboard // "us"' "$CONFIG_FILE")"
-    BUILD_DISK_DEVICE="$(yq -r '.disk_device // "auto"' "$CONFIG_FILE")"
-    BUILD_SWAP_SIZE="$(yq -r '.swap_size // "4"' "$CONFIG_FILE")"
-    BUILD_EFI_SIZE="$(yq -r '.efi_size // "512M"' "$CONFIG_FILE")"
-    BUILD_BOOT_SIZE="$(yq -r '.boot_size // "1G"' "$CONFIG_FILE")"
-    BUILD_ROOT_SIZE="$(yq -r '.root_size // "4G-"' "$CONFIG_FILE")"
-    BUILD_NETWORK="$(yq -r '.network // "dhcp"' "$CONFIG_FILE")"
-    BUILD_EXTRA_PACKAGES="$(yq -r '.extra_packages // empty' "$CONFIG_FILE")"
-    BUILD_DEFAULT_HOSTNAME="$(yq -r '.default_hostname // "debian-server"' "$CONFIG_FILE")"
-    BUILD_OUTPUT="$(yq -r '.output // "./output/fai-luks.iso"' "$CONFIG_FILE")"
-    BUILD_POST_INSTALL="$(yq -r '.post_install_script // empty' "$CONFIG_FILE")"
+    BUILD_LUKS_PASSPHRASE="$(cfg '.luks_passphrase // empty')"
+    BUILD_ADMIN_USER="$(cfg '.admin_user // empty')"
+    BUILD_ADMIN_PASSWORD="$(cfg '.admin_password // empty')"
+    BUILD_SSH_KEY_GITHUB="$(cfg '.ssh_key_github // empty')"
+    BUILD_SSH_KEY_URL="$(cfg '.ssh_key_url // empty')"
+    BUILD_SSH_KEY_FILE="$(cfg '.ssh_key_file // empty')"
+    BUILD_SSH_KEY_LITERAL="$(cfg '.ssh_key_literal // empty')"
+    BUILD_RELEASE="$(cfg '.release // "trixie"')"
+    BUILD_TIMEZONE="$(cfg '.timezone // "UTC"')"
+    BUILD_LOCALE="$(cfg '.locale // "en_US.UTF-8"')"
+    BUILD_KEYBOARD="$(cfg '.keyboard // "us"')"
+    BUILD_DISK_DEVICE="$(cfg '.disk_device // "auto"')"
+    BUILD_SWAP_SIZE="$(cfg '.swap_size // 4 | tostring')"
+    BUILD_EFI_SIZE="$(cfg '.efi_size // "512M"')"
+    BUILD_BOOT_SIZE="$(cfg '.boot_size // "1G"')"
+    BUILD_ROOT_SIZE="$(cfg '.root_size // "4G-"')"
+    BUILD_NETWORK="$(cfg '.network // "dhcp"')"
+    BUILD_EXTRA_PACKAGES="$(cfg '.extra_packages // empty')"
+    BUILD_DEFAULT_HOSTNAME="$(cfg '.default_hostname // "debian-server"')"
+    BUILD_OUTPUT="$(cfg '.output // "./output/fai-luks.iso"')"
+    BUILD_POST_INSTALL="$(cfg '.post_install_script // empty')"
 
     # Override output if specified on CLI
     if [ -n "$OUTPUT_OVERRIDE" ]; then
@@ -349,7 +355,7 @@ parse_and_validate() {
     fi
 
     # Read hosts array
-    BUILD_HOST_COUNT="$(yq -r '.hosts | length // 0' "$CONFIG_FILE")"
+    BUILD_HOST_COUNT="$(cfg '.hosts | length // 0')"
 
     # ── Validation ──
     local errors=()
@@ -417,8 +423,8 @@ parse_and_validate() {
         local i
         for ((i = 0; i < BUILD_HOST_COUNT; i++)); do
             local h_hostname h_mac
-            h_hostname="$(yq -r ".hosts[$i].hostname // empty" "$CONFIG_FILE")"
-            h_mac="$(yq -r ".hosts[$i].mac // empty" "$CONFIG_FILE")"
+            h_hostname="$(cfg ".hosts[$i].hostname // empty")"
+            h_mac="$(cfg ".hosts[$i].mac // empty")"
 
             [ -z "$h_hostname" ] && errors+=("hosts[$i].hostname: required")
             if [ -n "$h_hostname" ] && ! [[ "$h_hostname" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]; then
@@ -662,8 +668,8 @@ assemble_config_space() {
         local i
         for ((i = 0; i < BUILD_HOST_COUNT; i++)); do
             local h_hostname h_mac
-            h_hostname="$(yq -r ".hosts[$i].hostname" "$CONFIG_FILE")"
-            h_mac="$(yq -r ".hosts[$i].mac" "$CONFIG_FILE")"
+            h_hostname="$(cfg ".hosts[$i].hostname")"
+            h_mac="$(cfg ".hosts[$i].mac")"
             host_map_content+="    \"${h_mac,,}\") THIS_HOSTNAME=\"${h_hostname}\" ;;"$'\n'
         done
         host_map_content+="    *) THIS_HOSTNAME=\"${BUILD_DEFAULT_HOSTNAME}\" ;;"$'\n'
@@ -907,8 +913,8 @@ EOF
         local i
         for ((i = 0; i < BUILD_HOST_COUNT; i++)); do
             local h_hostname h_mac
-            h_hostname="$(yq -r ".hosts[$i].hostname" "$CONFIG_FILE")"
-            h_mac="$(yq -r ".hosts[$i].mac" "$CONFIG_FILE")"
+            h_hostname="$(cfg ".hosts[$i].hostname")"
+            h_mac="$(cfg ".hosts[$i].mac")"
             printf "  %-20s %s\n" "$h_hostname" "$h_mac"
         done
         printf "  %-20s %s\n" "$BUILD_DEFAULT_HOSTNAME" "(default / unmatched)"
