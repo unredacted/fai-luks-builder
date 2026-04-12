@@ -882,8 +882,7 @@ build_iso() {
 print_summary() {
     log_step 8 8 "Build complete!"
 
-    cat << EOF
-
+    echo -e "
 ${BOLD}═══════════════════════════════════════════════════════════════${NC}
 ${GREEN}${BOLD}  FAI ISO Build Summary${NC}
 ${BOLD}═══════════════════════════════════════════════════════════════${NC}
@@ -912,8 +911,7 @@ ${BOLD}───── Post-Install Reminders ─────${NC}
 
   2. Change the admin password:
      passwd ${BUILD_ADMIN_USER}
-
-EOF
+"
 
     # Print hostname → MAC table if hosts were configured
     if [ "$BUILD_HOST_COUNT" -gt 0 ]; then
