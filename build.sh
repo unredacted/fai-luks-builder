@@ -373,6 +373,11 @@ parse_and_validate() {
     BUILD_OUTPUT="$(cfg '.output // "./output/fai-luks.iso"')"
     BUILD_POST_INSTALL="$(cfg '.post_install_script // empty')"
 
+    # Global dropbear config
+    BUILD_DROPBEAR_ENABLED="$(cfg '.dropbear.enabled // false')"
+    BUILD_DROPBEAR_OPTIONS="$(cfg '.dropbear.options // "-I 600 -j -k -p 22 -s"')"
+    BUILD_DROPBEAR_SSH_KEY="$(cfg '.dropbear.ssh_key // empty')"
+
     # Override output if specified on CLI
     if [ -n "$OUTPUT_OVERRIDE" ]; then
         BUILD_OUTPUT="$OUTPUT_OVERRIDE"
@@ -443,12 +448,16 @@ parse_and_validate() {
     fi
 
     # Validate hosts array
+    BUILD_ANY_DROPBEAR=false
     if [ "$BUILD_HOST_COUNT" -gt 0 ]; then
         local i
         for ((i = 0; i < BUILD_HOST_COUNT; i++)); do
-            local h_hostname h_mac
+            local h_hostname h_mac h_ip h_gateway h_dropbear
             h_hostname="$(cfg ".hosts[$i].hostname // empty")"
             h_mac="$(cfg ".hosts[$i].mac // empty")"
+            h_ip="$(cfg ".hosts[$i].ip // empty")"
+            h_gateway="$(cfg ".hosts[$i].gateway // empty")"
+            h_dropbear="$(cfg ".hosts[$i].dropbear // empty")"
 
             [ -z "$h_hostname" ] && errors+=("hosts[$i].hostname: required")
             if [ -n "$h_hostname" ] && ! [[ "$h_hostname" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]; then
@@ -457,6 +466,28 @@ parse_and_validate() {
             [ -z "$h_mac" ] && errors+=("hosts[$i].mac: required")
             if [ -n "$h_mac" ] && ! [[ "$h_mac" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]; then
                 errors+=("hosts[$i].mac: invalid MAC address '$h_mac'")
+            fi
+
+            # Static IP validation
+            if [ -n "$h_ip" ]; then
+                if ! [[ "$h_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
+                    errors+=("hosts[$i].ip: must be CIDR format (e.g., 10.0.0.1/24)")
+                fi
+                if [ -z "$h_gateway" ]; then
+                    errors+=("hosts[$i].gateway: required when ip is set")
+                elif ! [[ "$h_gateway" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    errors+=("hosts[$i].gateway: invalid IP address '$h_gateway'")
+                fi
+            fi
+
+            # Dropbear validation
+            local effective_dropbear="$h_dropbear"
+            [ -z "$effective_dropbear" ] && effective_dropbear="$BUILD_DROPBEAR_ENABLED"
+            if [ "$effective_dropbear" = "true" ]; then
+                if [ -z "$h_ip" ]; then
+                    errors+=("hosts[$i].dropbear: requires ip to be set (initramfs needs static IP for SSH)")
+                fi
+                BUILD_ANY_DROPBEAR=true
             fi
         done
     fi
@@ -495,6 +526,17 @@ parse_and_validate() {
         log_fatal "SSH key does not start with a valid algorithm prefix.\nGot: $(echo "$BUILD_SSH_KEY" | head -c 40)..."
     fi
     log_info "SSH public key resolved ($(echo "$BUILD_SSH_KEY" | wc -l | tr -d ' ') key(s))"
+
+    # ── Resolve dropbear SSH key ──
+    BUILD_DROPBEAR_SSH_KEY_RESOLVED=""
+    if [ "$BUILD_ANY_DROPBEAR" = "true" ]; then
+        if [ -n "$BUILD_DROPBEAR_SSH_KEY" ]; then
+            BUILD_DROPBEAR_SSH_KEY_RESOLVED="$BUILD_DROPBEAR_SSH_KEY"
+        else
+            BUILD_DROPBEAR_SSH_KEY_RESOLVED="$BUILD_SSH_KEY"
+        fi
+        log_info "Dropbear SSH key resolved (reusing main key: $([ -z "$BUILD_DROPBEAR_SSH_KEY" ] && echo "yes" || echo "no"))"
+    fi
 
     # ── Hash admin password if not pre-hashed ──
     if [[ "$BUILD_ADMIN_PASSWORD" == \$6\$* ]] || [[ "$BUILD_ADMIN_PASSWORD" == \$y\$* ]]; then
@@ -691,22 +733,53 @@ assemble_config_space() {
     # ── Generate host map ──
     local host_map_content
     if [ "$BUILD_HOST_COUNT" -gt 0 ]; then
-        log_info "Generating MAC-based hostname map ($BUILD_HOST_COUNT hosts)..."
+        log_info "Generating MAC-based host map ($BUILD_HOST_COUNT hosts)..."
         # shellcheck disable=SC2016 # Single quotes intentional — this is a code template, not executed here
         host_map_content='MAC=$(cat /sys/class/net/$(ip route show default 2>/dev/null | awk '"'"'/default/ {print $5}'"'"' | head -1)/address 2>/dev/null || echo "unknown")'$'\n'
         # shellcheck disable=SC2016
         host_map_content+='case "${MAC,,}" in'$'\n'
         local i
         for ((i = 0; i < BUILD_HOST_COUNT; i++)); do
-            local h_hostname h_mac
+            local h_hostname h_mac h_ip h_gateway h_interface h_dropbear h_dropbear_opts
             h_hostname="$(cfg ".hosts[$i].hostname")"
             h_mac="$(cfg ".hosts[$i].mac")"
-            host_map_content+="    \"${h_mac,,}\") THIS_HOSTNAME=\"${h_hostname}\" ;;"$'\n'
+            h_ip="$(cfg ".hosts[$i].ip // empty")"
+            h_gateway="$(cfg ".hosts[$i].gateway // empty")"
+            h_interface="$(cfg ".hosts[$i].interface // empty")"
+            h_dropbear="$(cfg ".hosts[$i].dropbear // empty")"
+            h_dropbear_opts="$(cfg ".hosts[$i].dropbear_options // empty")"
+
+            # Compute effective dropbear state (per-host overrides global)
+            local eff_dropbear="$h_dropbear"
+            [ -z "$eff_dropbear" ] && eff_dropbear="$BUILD_DROPBEAR_ENABLED"
+            local eff_dropbear_opts="$h_dropbear_opts"
+            [ -z "$eff_dropbear_opts" ] && eff_dropbear_opts="$BUILD_DROPBEAR_OPTIONS"
+
+            host_map_content+="    \"${h_mac,,}\")"$'\n'
+            host_map_content+="        THIS_HOSTNAME=\"${h_hostname}\""$'\n'
+            host_map_content+="        THIS_IP=\"${h_ip}\""$'\n'
+            host_map_content+="        THIS_GATEWAY=\"${h_gateway}\""$'\n'
+            host_map_content+="        THIS_INTERFACE=\"${h_interface}\""$'\n'
+            host_map_content+="        THIS_DROPBEAR=\"${eff_dropbear}\""$'\n'
+            host_map_content+="        THIS_DROPBEAR_OPTIONS=\"${eff_dropbear_opts}\""$'\n'
+            host_map_content+="        ;;"$'\n'
         done
-        host_map_content+="    *) THIS_HOSTNAME=\"${BUILD_DEFAULT_HOSTNAME}\" ;;"$'\n'
+        host_map_content+="    *)"$'\n'
+        host_map_content+="        THIS_HOSTNAME=\"${BUILD_DEFAULT_HOSTNAME}\""$'\n'
+        host_map_content+="        THIS_IP=\"\""$'\n'
+        host_map_content+="        THIS_GATEWAY=\"\""$'\n'
+        host_map_content+="        THIS_INTERFACE=\"\""$'\n'
+        host_map_content+="        THIS_DROPBEAR=\"false\""$'\n'
+        host_map_content+="        THIS_DROPBEAR_OPTIONS=\"\""$'\n'
+        host_map_content+="        ;;"$'\n'
         host_map_content+='esac'
     else
-        host_map_content="THIS_HOSTNAME=\"${BUILD_DEFAULT_HOSTNAME}\""
+        host_map_content="THIS_HOSTNAME=\"${BUILD_DEFAULT_HOSTNAME}\""$'\n'
+        host_map_content+="THIS_IP=\"\""$'\n'
+        host_map_content+="THIS_GATEWAY=\"\""$'\n'
+        host_map_content+="THIS_INTERFACE=\"\""$'\n'
+        host_map_content+="THIS_DROPBEAR=\"false\""$'\n'
+        host_map_content+="THIS_DROPBEAR_OPTIONS=\"\""
     fi
 
     # ── Generate extra packages (one per line) ──
@@ -743,25 +816,43 @@ assemble_config_space() {
     template_replace_all "TEMPLATED_BOOT_SIZE"             "$BUILD_BOOT_SIZE"             "$config_dir"
     template_replace_all "TEMPLATED_ROOT_SIZE"             "$BUILD_ROOT_SIZE"             "$config_dir"
 
-    # Multi-line replacements: host map and extra packages
-    # For host map, replace the TEMPLATED_HOST_MAP line in the setup script
-    local setup_script="$config_dir/scripts/CUSTOM_SETUP/10-setup"
-    if [ -f "$setup_script" ]; then
-        # Write host map to temp file, then use awk to replace the placeholder line
-        local host_map_file="${WORKDIR}/host_map.tmp"
-        echo "$host_map_content" > "$host_map_file"
-        awk -v mapfile="$host_map_file" '
-            /TEMPLATED_HOST_MAP/ {
-                while ((getline line < mapfile) > 0) print line
-                close(mapfile)
-                next
-            }
-            { print }
-        ' "$setup_script" > "${setup_script}.tmp" && mv "${setup_script}.tmp" "$setup_script"
+    # Multi-line replacements: host map, dropbear package, extra packages
+
+    # Inject host map into both scripts that need per-host config
+    local host_map_file="${WORKDIR}/host_map.tmp"
+    echo "$host_map_content" > "$host_map_file"
+    local script_file
+    for script_file in \
+        "$config_dir/scripts/CUSTOM_SETUP/10-setup" \
+        "$config_dir/scripts/LUKS_SERVER/10-crypttab"; do
+        if [ -f "$script_file" ] && grep -q "TEMPLATED_HOST_MAP" "$script_file"; then
+            awk -v mapfile="$host_map_file" '
+                /TEMPLATED_HOST_MAP/ {
+                    while ((getline line < mapfile) > 0) print line
+                    close(mapfile)
+                    next
+                }
+                { print }
+            ' "$script_file" > "${script_file}.tmp" && mv "${script_file}.tmp" "$script_file"
+        fi
+    done
+
+    # Dropbear package (conditional)
+    local pkg_config="$config_dir/package_config/LUKS_SERVER"
+    if [ "$BUILD_ANY_DROPBEAR" = "true" ]; then
+        sed -i 's/TEMPLATED_DROPBEAR_PACKAGE/dropbear-initramfs/' "$pkg_config"
+        log_info "Dropbear package: included (dropbear-initramfs)"
+    else
+        sed -i '/TEMPLATED_DROPBEAR_PACKAGE/d' "$pkg_config"
+        log_info "Dropbear package: not needed"
+    fi
+
+    # Dropbear SSH key
+    if [ -n "$BUILD_DROPBEAR_SSH_KEY_RESOLVED" ]; then
+        template_replace_all "TEMPLATED_DROPBEAR_SSH_KEY" "$BUILD_DROPBEAR_SSH_KEY_RESOLVED" "$config_dir"
     fi
 
     # For extra packages, replace the placeholder line
-    local pkg_config="$config_dir/package_config/LUKS_SERVER"
     if [ -f "$pkg_config" ] && [ -n "$extra_packages_lines" ]; then
         local pkg_file="${WORKDIR}/extra_pkgs.tmp"
         echo "$extra_packages_lines" > "$pkg_file"
@@ -939,19 +1030,22 @@ ${BOLD}───── Post-Install Reminders ─────${NC}
      passwd ${BUILD_ADMIN_USER}
 "
 
-    # Print hostname → MAC table if hosts were configured
+    # Print host table if hosts were configured
     if [ "$BUILD_HOST_COUNT" -gt 0 ]; then
         echo -e "${BOLD}───── Host Map ─────${NC}\n"
-        printf "  %-20s %s\n" "HOSTNAME" "MAC ADDRESS"
-        printf "  %-20s %s\n" "────────" "───────────"
+        printf "  %-20s %-19s %-18s %s\n" "HOSTNAME" "MAC ADDRESS" "IP" "DROPBEAR"
+        printf "  %-20s %-19s %-18s %s\n" "────────" "───────────" "──" "────────"
         local i
         for ((i = 0; i < BUILD_HOST_COUNT; i++)); do
-            local h_hostname h_mac
+            local h_hostname h_mac h_ip h_dropbear
             h_hostname="$(cfg ".hosts[$i].hostname")"
             h_mac="$(cfg ".hosts[$i].mac")"
-            printf "  %-20s %s\n" "$h_hostname" "$h_mac"
+            h_ip="$(cfg ".hosts[$i].ip // empty")"
+            h_dropbear="$(cfg ".hosts[$i].dropbear // empty")"
+            [ -z "$h_dropbear" ] && h_dropbear="$BUILD_DROPBEAR_ENABLED"
+            printf "  %-20s %-19s %-18s %s\n" "$h_hostname" "$h_mac" "${h_ip:-dhcp}" "$h_dropbear"
         done
-        printf "  %-20s %s\n" "$BUILD_DEFAULT_HOSTNAME" "(default / unmatched)"
+        printf "  %-20s %-19s %-18s %s\n" "$BUILD_DEFAULT_HOSTNAME" "(default)" "dhcp" "false"
         echo ""
     fi
 }
@@ -984,6 +1078,7 @@ do_dry_run() {
     if [ "$BUILD_HOST_COUNT" -gt 0 ]; then
         echo "  hosts:             $BUILD_HOST_COUNT entries"
     fi
+    echo "  dropbear:          $BUILD_ANY_DROPBEAR (any host enabled)"
 
     echo -e "\n${BOLD}Upstream files to cherry-pick:${NC}"
     echo "  class/01-classes, 10-base-classes, 20-hwdetect.sh, 85-efi-classes"

@@ -1,8 +1,11 @@
 #! /bin/bash
 set -e
 
-# Configure crypttab and GRUB for LUKS boot on the installed system.
+# Configure crypttab, GRUB, and optionally dropbear for LUKS boot.
 # This runs during the FAI "configure" task for the LUKS_SERVER class.
+
+# Per-host config (MAC-based detection, injected at build time)
+TEMPLATED_HOST_MAP
 
 # Find the LUKS partition and its UUID
 LUKS_DEV=$(blkid -t TYPE=crypto_LUKS -o device | head -1)
@@ -23,6 +26,41 @@ GRUB_ENABLE_CRYPTODISK=y
 GRUB_CMDLINE_LINUX="cryptdevice=UUID=${LUKS_UUID}:crypt_disk"
 EOF
 
-# Rebuild initramfs with cryptsetup support and update GRUB
+# --- Dropbear initramfs (remote LUKS unlock over SSH) ---
+if [ "$THIS_DROPBEAR" = "true" ]; then
+    echo "Configuring dropbear-initramfs for remote LUKS unlock..."
+
+    # Dropbear daemon options
+    mkdir -p $target/etc/dropbear/initramfs
+    cat > $target/etc/dropbear/initramfs/dropbear.conf << DBEOF
+DROPBEAR_OPTIONS="${THIS_DROPBEAR_OPTIONS}"
+DBEOF
+
+    # SSH authorized key for dropbear
+    cat > $target/etc/dropbear/initramfs/authorized_keys << 'DBAUTHEOF'
+TEMPLATED_DROPBEAR_SSH_KEY
+DBAUTHEOF
+    chmod 600 $target/etc/dropbear/initramfs/authorized_keys
+
+    # Initramfs network config (static IP for pre-boot SSH access)
+    # Format: IP=<client-ip>::<gateway>:<netmask>:<hostname>:<device>
+    if [ -n "$THIS_IP" ]; then
+        INITRAMFS_ADDR="${THIS_IP%%/*}"
+        INITRAMFS_PREFIX="${THIS_IP##*/}"
+        INITRAMFS_NETMASK=$($ROOTCMD python3 -c \
+            "import ipaddress; print(ipaddress.IPv4Network('0.0.0.0/${INITRAMFS_PREFIX}').netmask)" \
+            2>/dev/null || echo "255.255.255.0")
+        echo "IP=${INITRAMFS_ADDR}::${THIS_GATEWAY}:${INITRAMFS_NETMASK}:${THIS_HOSTNAME}:${THIS_INTERFACE}" \
+            >> $target/etc/initramfs-tools/initramfs.conf
+    fi
+fi
+
+# If dropbear package is installed (shared ISO) but not enabled for this host,
+# remove authorized_keys so dropbear is not included in the initramfs.
+if [ "$THIS_DROPBEAR" != "true" ] && [ -d $target/etc/dropbear/initramfs ]; then
+    rm -f $target/etc/dropbear/initramfs/authorized_keys
+fi
+
+# Rebuild initramfs with cryptsetup (and dropbear if configured) support, then update GRUB
 $ROOTCMD update-initramfs -u -k all
 $ROOTCMD update-grub

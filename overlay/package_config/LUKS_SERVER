@@ -10,4 +10,5 @@ ca-certificates
 net-tools
 man-db
 dbus
+TEMPLATED_DROPBEAR_PACKAGE
 TEMPLATED_EXTRA_PACKAGES

@@ -59,3 +59,33 @@ cat > $target/etc/hosts << HOSTS
 ff02::1     ip6-allnodes
 ff02::2     ip6-allrouters
 HOSTS
+
+# --- Static IP for installed system ---
+if [ -n "$THIS_IP" ]; then
+    # Determine interface name
+    if [ -n "$THIS_INTERFACE" ]; then
+        NET_IFACE="$THIS_INTERFACE"
+    else
+        NET_IFACE=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -1)
+    fi
+
+    NET_ADDR="${THIS_IP%%/*}"
+    NET_PREFIX="${THIS_IP##*/}"
+
+    # Write /etc/network/interfaces (overwrites DHCP default from upstream DEBIAN/30-interface)
+    cat > $target/etc/network/interfaces << NETEOF
+# Configured by fai-luks-builder
+auto lo
+iface lo inet loopback
+
+auto ${NET_IFACE}
+iface ${NET_IFACE} inet static
+    address ${NET_ADDR}/${NET_PREFIX}
+    gateway ${THIS_GATEWAY}
+NETEOF
+
+    # Set DNS to gateway if no nameservers configured
+    if ! grep -q '^nameserver' $target/etc/resolv.conf 2>/dev/null; then
+        echo "nameserver ${THIS_GATEWAY}" > $target/etc/resolv.conf
+    fi
+fi

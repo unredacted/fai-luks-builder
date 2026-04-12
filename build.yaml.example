@@ -35,16 +35,29 @@ root_size: "4G-"     # Root partition minimum (- = fill remaining space)
 # --- Network ---
 network: "dhcp"
 
+# --- Dropbear (remote LUKS unlock via SSH, optional) ---
+# Starts a tiny SSH server in the initramfs so you can SSH in and
+# run `cryptroot-unlock` to enter the LUKS passphrase remotely.
+# dropbear:
+#   enabled: false                    # Global default (per-host overrides below)
+#   options: "-I 600 -j -k -p 22 -s" # Dropbear CLI options
+#   ssh_key: ""                       # Separate SSH key for dropbear. If empty, reuses ssh_key_* above.
+
 # --- Additional packages (space or newline separated) ---
 extra_packages: "htop tmux iotop rsync curl wget vim unattended-upgrades"
 
 # --- Hostname / host mapping (optional) ---
-# If hosts list is provided, hostname is set by MAC address match.
-# If omitted, all servers get default_hostname.
+# If hosts list is provided, hostname and network are set by MAC address match.
+# If omitted, all servers get default_hostname with DHCP.
 default_hostname: "debian-server"
 hosts:
   - hostname: server01
     mac: "0c:c4:7a:69:39:30"
+    # ip: "10.77.0.20/24"           # Static IP in CIDR notation. Omit for DHCP.
+    # gateway: "10.77.0.1"          # Required when ip is set
+    # interface: "enp94s0f0"        # Optional. Empty = auto-detect at install time.
+    # dropbear: true                # Enable remote LUKS unlock for this host
+    # dropbear_options: ""          # Per-host override. Empty = use global default.
   - hostname: server02
     mac: "aa:bb:cc:dd:ee:01"
   - hostname: server03
