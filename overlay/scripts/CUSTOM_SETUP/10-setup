@@ -7,7 +7,7 @@ set -e
 # --- User account ---
 USERNAME="TEMPLATED_ADMIN_USER"
 $ROOTCMD useradd -m -s /bin/bash -c "${USERNAME}" "${USERNAME}" 2>/dev/null || true
-# Use usermod to set the pre-hashed password — avoids bash expanding $6$... in the hash
+# Use usermod to set the pre-hashed password -- avoids bash expanding $6$... in the hash
 $ROOTCMD usermod --password 'TEMPLATED_ADMIN_PASSWORD_HASH' "${USERNAME}"
 echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > $target/etc/sudoers.d/${USERNAME}
 chmod 440 $target/etc/sudoers.d/${USERNAME}

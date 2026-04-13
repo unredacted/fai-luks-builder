@@ -15,7 +15,7 @@ if [ -z "$LUKS_DEV" ]; then
 fi
 LUKS_UUID=$(blkid -s UUID -o value "$LUKS_DEV")
 
-# Configure crypttab — tells the initramfs to prompt for LUKS passphrase
+# Configure crypttab -- tells the initramfs to prompt for LUKS passphrase
 echo "crypt_disk UUID=${LUKS_UUID} none luks,discard" > $target/etc/crypttab
 
 # Configure GRUB for LUKS

@@ -1,13 +1,6 @@
-# Disk layout: UEFI + LUKS + LVM
-#
-# Partition 1: EFI System Partition (ESP)
-# Partition 2: /boot (unencrypted, needed for GRUB to find the kernel)
-# Partition 3: LUKS-encrypted physical volume for LVM
-#   └── VG vg0
-#       ├── lv root (/)
-#       └── lv swap
+# UEFI + LUKS + LVM: ESP, /boot, LUKS partition with LVM root and swap
 
-disk_config disk1 disklabel:gpt bootloader:grub fstabkey:uuid
+disk_config disk1 disklabel:gpt bootable:1 fstabkey:uuid
 
 primary  /boot/efi  TEMPLATED_EFI_SIZE   vfat   rw
 primary  /boot      TEMPLATED_BOOT_SIZE  ext4   rw,noatime

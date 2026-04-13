@@ -11,7 +11,7 @@ TIMEZONE=TEMPLATED_TIMEZONE
 # Hostname
 HOSTNAME=TEMPLATED_DEFAULT_HOSTNAME
 
-# Lock root password — admin user gets sudo instead
+# Lock root password -- admin user gets sudo instead
 ROOTPW='!'
 
 # Override upstream demo user and disable its weak default password

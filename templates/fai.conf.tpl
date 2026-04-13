@@ -11,5 +11,5 @@ FAI_CONFIG_SRC="file:///srv/fai/config"
 # createvt: create virtual terminals (Alt-F2, Alt-F3)
 FAI_FLAGS="verbose,sshd,createvt"
 
-# Log protocol (none for ISO builds — logs saved locally)
+# Log protocol (none for ISO builds -- logs saved locally)
 FAI_LOGPROTO=

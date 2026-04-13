@@ -12,7 +12,7 @@ NFSROOT_PACKAGES="cryptsetup lvm2 e2fsprogs dosfstools efibootmgr TEMPLATED_GRUB
 # Where to build the nfsroot
 NFSROOT=/srv/fai/nfsroot
 
-# TFTP root — not used for ISO builds, but fai-setup requires it to be set
+# TFTP root -- not used for ISO builds, but fai-setup requires it to be set
 TFTPROOT=/srv/tftp/fai
 
 # FAI config directory
