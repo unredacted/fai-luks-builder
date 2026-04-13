@@ -50,6 +50,17 @@ echo "TEMPLATED_TIMEZONE" > $target/etc/timezone
 # --- Hostname ---
 TEMPLATED_HOST_MAP
 
+# Auto-detect interface from MAC if not specified in build.yaml
+if [ -z "$THIS_INTERFACE" ] && [ -n "$MAC" ] && [ "$MAC" != "unknown" ]; then
+    for syspath in /sys/class/net/*; do
+        iface_mac=$(cat "$syspath/address" 2>/dev/null || true)
+        if [ "${iface_mac,,}" = "${MAC,,}" ]; then
+            THIS_INTERFACE=$(basename "$syspath")
+            break
+        fi
+    done
+fi
+
 echo "$THIS_HOSTNAME" > $target/etc/hostname
 cat > $target/etc/hosts << HOSTS
 127.0.0.1   localhost

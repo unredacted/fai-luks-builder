@@ -7,6 +7,18 @@ set -e
 # Per-host config (MAC-based detection, injected at build time)
 TEMPLATED_HOST_MAP
 
+# If no interface was specified in build.yaml, detect it from the MAC address
+# that matched this host. The MAC variable is set by the host map above.
+if [ -z "$THIS_INTERFACE" ] && [ -n "$MAC" ] && [ "$MAC" != "unknown" ]; then
+    for syspath in /sys/class/net/*; do
+        iface_mac=$(cat "$syspath/address" 2>/dev/null || true)
+        if [ "${iface_mac,,}" = "${MAC,,}" ]; then
+            THIS_INTERFACE=$(basename "$syspath")
+            break
+        fi
+    done
+fi
+
 # Find the LUKS partition and its UUID
 LUKS_DEV=$(blkid -t TYPE=crypto_LUKS -o device | head -1)
 if [ -z "$LUKS_DEV" ]; then
@@ -18,13 +30,11 @@ LUKS_UUID=$(blkid -s UUID -o value "$LUKS_DEV")
 # Configure crypttab -- tells the initramfs to prompt for LUKS passphrase
 echo "crypt_disk UUID=${LUKS_UUID} none luks,discard" > $target/etc/crypttab
 
-# Configure GRUB for LUKS
-cat >> $target/etc/default/grub << EOF
-
-# LUKS support (added by fai-luks-builder)
-GRUB_ENABLE_CRYPTODISK=y
-GRUB_CMDLINE_LINUX="cryptdevice=UUID=${LUKS_UUID}:crypt_disk"
-EOF
+# Force cryptsetup inclusion in the initramfs. The cryptroot hook's auto-detection
+# traces the device chain (root -> LVM -> LUKS -> disk) to decide which crypttab
+# entries to include. This tracing fails inside the FAI chroot (same reason
+# grub-probe fails). CRYPTSETUP=y forces all crypttab entries into the initramfs.
+echo "CRYPTSETUP=y" >> $target/etc/cryptsetup-initramfs/conf-hook
 
 # --- Dropbear initramfs (remote LUKS unlock over SSH) ---
 if [ "$THIS_DROPBEAR" = "true" ]; then
@@ -54,17 +64,6 @@ DBAUTHEOF
         fi
     done
 
-    # Initramfs network config (static IP for pre-boot SSH access)
-    # Format: IP=<client-ip>::<gateway>:<netmask>:<hostname>:<device>
-    if [ -n "$THIS_IP" ]; then
-        INITRAMFS_ADDR="${THIS_IP%%/*}"
-        INITRAMFS_PREFIX="${THIS_IP##*/}"
-        INITRAMFS_NETMASK=$($ROOTCMD python3 -c \
-            "import ipaddress; print(ipaddress.IPv4Network('0.0.0.0/${INITRAMFS_PREFIX}').netmask)" \
-            2>/dev/null || echo "255.255.255.0")
-        echo "IP=${INITRAMFS_ADDR}::${THIS_GATEWAY}:${INITRAMFS_NETMASK}:${THIS_HOSTNAME}:${THIS_INTERFACE}" \
-            >> $target/etc/initramfs-tools/initramfs.conf
-    fi
 fi
 
 # If dropbear package is installed (shared ISO) but not enabled for this host,
@@ -73,6 +72,78 @@ if [ "$THIS_DROPBEAR" != "true" ] && [ -d $target/etc/dropbear/initramfs ]; then
     rm -f $target/etc/dropbear/initramfs/authorized_keys
 fi
 
-# Rebuild initramfs with cryptsetup (and dropbear if configured) support, then update GRUB
+# Rebuild initramfs with cryptsetup (and dropbear if configured) support
 $ROOTCMD update-initramfs -u -k all
-$ROOTCMD update-grub
+
+# --- Generate grub.cfg manually ---
+# grub-mkconfig (update-grub) fails inside the FAI chroot because grub-probe
+# cannot trace the LVM-on-LUKS device chain. The 10_linux script has set -e
+# and exits silently when grub-probe fails, producing no Linux boot entries.
+#
+# We write a working grub.cfg directly. On the running system (outside the
+# chroot), update-grub works correctly and will be triggered automatically
+# by kernel package hooks on future kernel updates.
+
+BOOT_PART=$(findmnt -n -o SOURCE "$target/boot")
+BOOT_UUID=$(blkid -s UUID -o value "$BOOT_PART")
+ROOT_DEV="/dev/mapper/vg0-root"
+
+# Find the latest kernel and initrd
+KERNEL=$(basename "$(ls -1t $target/boot/vmlinuz-* | head -1)")
+INITRD=$(basename "$(ls -1t $target/boot/initrd.img-* | head -1)")
+KVER="${KERNEL#vmlinuz-}"
+
+if [ -z "$BOOT_UUID" ] || [ -z "$KERNEL" ] || [ -z "$INITRD" ]; then
+    echo "ERROR: Could not determine boot UUID, kernel, or initrd for grub.cfg"
+    echo "  BOOT_PART=$BOOT_PART BOOT_UUID=$BOOT_UUID KERNEL=$KERNEL INITRD=$INITRD"
+    exit 1
+fi
+
+# cryptopts kernel parameter -- tells the initramfs exactly which LUKS device
+# to unlock, bypassing the cryptroot hook's auto-detection which fails in
+# the FAI chroot. Format matches /etc/crypttab fields.
+CRYPTOPTS="cryptopts=target=crypt_disk,source=UUID=${LUKS_UUID},luks,discard"
+
+# Network kernel parameter -- controls initramfs networking.
+# For dropbear hosts: static IP on a single interface (for remote LUKS unlock via SSH)
+# For all others: ip=off prevents the initramfs from configuring ANY interfaces
+if [ "$THIS_DROPBEAR" = "true" ] && [ -n "$THIS_IP" ] && [ -n "$THIS_INTERFACE" ]; then
+    INITRAMFS_ADDR="${THIS_IP%%/*}"
+    INITRAMFS_PREFIX="${THIS_IP##*/}"
+    INITRAMFS_NETMASK=$(python3 -c \
+        "import ipaddress; print(ipaddress.IPv4Network('0.0.0.0/${INITRAMFS_PREFIX}').netmask)" \
+        2>/dev/null || echo "255.255.255.0")
+    IP_PARAM="ip=${INITRAMFS_ADDR}::${THIS_GATEWAY}:${INITRAMFS_NETMASK}:${THIS_HOSTNAME}:${THIS_INTERFACE}:off"
+else
+    IP_PARAM="ip=off"
+fi
+
+echo "Writing grub.cfg: boot=$BOOT_UUID kernel=$KERNEL initrd=$INITRD root=$ROOT_DEV luks=$LUKS_UUID iface=$THIS_INTERFACE"
+
+cat > $target/boot/grub/grub.cfg << GRUBEOF
+# grub.cfg -- generated by fai-luks-builder
+# On the running system, run update-grub to regenerate with full auto-detection.
+
+set timeout=5
+set default=0
+
+insmod part_gpt
+insmod ext2
+insmod lvm
+
+search --no-floppy --fs-uuid --set=root ${BOOT_UUID}
+
+menuentry 'Debian GNU/Linux' --class debian --class gnu-linux --class gnu --class os {
+    echo 'Loading Linux ${KVER} ...'
+    linux /${KERNEL} root=${ROOT_DEV} ${CRYPTOPTS} ${IP_PARAM} ro quiet
+    echo 'Loading initial ramdisk ...'
+    initrd /${INITRD}
+}
+
+menuentry 'Debian GNU/Linux (recovery mode)' --class debian --class gnu-linux --class gnu --class os {
+    echo 'Loading Linux ${KVER} ...'
+    linux /${KERNEL} root=${ROOT_DEV} ${CRYPTOPTS} ${IP_PARAM} ro single
+    echo 'Loading initial ramdisk ...'
+    initrd /${INITRD}
+}
+GRUBEOF

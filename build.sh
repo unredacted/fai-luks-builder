@@ -371,6 +371,7 @@ parse_and_validate() {
     BUILD_EXTRA_PACKAGES="$(cfg '.extra_packages // empty')"
     BUILD_DEFAULT_HOSTNAME="$(cfg '.default_hostname // "debian-server"')"
     BUILD_OUTPUT="$(cfg '.output // "./output/fai-luks.iso"')"
+    BUILD_NETWORK_INSTALL="$(cfg '.network_install // false')"
     BUILD_POST_INSTALL="$(cfg '.post_install_script // empty')"
 
     # Global dropbear config
@@ -911,6 +912,11 @@ assemble_config_space() {
 build_mirror() {
     log_step 6 8 "Building package mirror..."
 
+    if [ "$BUILD_NETWORK_INSTALL" = "true" ]; then
+        log_info "Skipping mirror (network install -- packages will be fetched from Debian repos)"
+        return
+    fi
+
     if [ $SKIP_MIRROR -eq 1 ]; then
         if [ -d "$MIRROR_DIR/pool" ]; then
             log_info "Skipping fai-mirror (--skip-mirror), reusing existing mirror"
@@ -973,11 +979,20 @@ build_iso() {
     # Remove existing ISO
     rm -f "$output_path"
 
-    log_info "Running fai-cd..."
-    if [ $VERBOSE -eq 1 ]; then
-        fai-cd -m "$MIRROR_DIR" -g /etc/fai/grub.cfg "$output_path" 2>&1 | tee "$LOG_DIR/fai-cd.log"
+    # Build fai-cd arguments
+    local fai_cd_args=(-g /etc/fai/grub.cfg)
+    if [ "$BUILD_NETWORK_INSTALL" = "true" ]; then
+        fai_cd_args+=(-M)
+        log_info "Running fai-cd (network install -- no mirror)..."
     else
-        fai-cd -m "$MIRROR_DIR" -g /etc/fai/grub.cfg "$output_path" > "$LOG_DIR/fai-cd.log" 2>&1
+        fai_cd_args+=(-m "$MIRROR_DIR")
+        log_info "Running fai-cd..."
+    fi
+
+    if [ $VERBOSE -eq 1 ]; then
+        fai-cd "${fai_cd_args[@]}" "$output_path" 2>&1 | tee "$LOG_DIR/fai-cd.log"
+    else
+        fai-cd "${fai_cd_args[@]}" "$output_path" > "$LOG_DIR/fai-cd.log" 2>&1
     fi
 
     # Verify ISO
@@ -1084,6 +1099,7 @@ do_dry_run() {
     if [ "$BUILD_HOST_COUNT" -gt 0 ]; then
         echo "  hosts:             $BUILD_HOST_COUNT entries"
     fi
+    echo "  network_install:   $BUILD_NETWORK_INSTALL"
     echo "  dropbear:          $BUILD_ANY_DROPBEAR (any host enabled)"
 
     echo -e "\n${BOLD}Upstream files to cherry-pick:${NC}"

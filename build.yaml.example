@@ -35,6 +35,11 @@ root_size: "4G-"     # Root partition minimum (- = fill remaining space)
 # --- Network ---
 network: "dhcp"
 
+# --- Install mode ---
+# true = small ISO (~350MB), pulls packages from Debian repos during install (requires internet)
+# false = full offline ISO (~500MB), all packages embedded in the ISO
+network_install: false
+
 # --- Dropbear (remote LUKS unlock via SSH, optional) ---
 # Starts a tiny SSH server in the initramfs so you can SSH in and
 # run `cryptroot-unlock` to enter the LUKS passphrase remotely.
