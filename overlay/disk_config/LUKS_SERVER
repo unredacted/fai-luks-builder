@@ -13,4 +13,4 @@ disk_config lvm
 vg  vg0  disk1.3
 
 vg0-root  /       TEMPLATED_ROOT_SIZE    ext4  rw,noatime,errors=remount-ro
-vg0-swap  swap    TEMPLATED_SWAP_SIZEg  swap  sw
+vg0-swap  swap    TEMPLATED_SWAP_SIZE  swap  sw

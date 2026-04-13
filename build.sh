@@ -363,7 +363,7 @@ parse_and_validate() {
     BUILD_LOCALE="$(cfg '.locale // "en_US.UTF-8"')"
     BUILD_KEYBOARD="$(cfg '.keyboard // "us"')"
     BUILD_DISK_DEVICE="$(cfg '.disk_device // "auto"')"
-    BUILD_SWAP_SIZE="$(cfg '.swap_size // 4 | tostring')"
+    BUILD_SWAP_SIZE="$(cfg '.swap_size // 4 | tostring')G"
     BUILD_EFI_SIZE="$(cfg '.efi_size // "512M"')"
     BUILD_BOOT_SIZE="$(cfg '.boot_size // "1G"')"
     BUILD_ROOT_SIZE="$(cfg '.root_size // "4G-"')"
@@ -427,8 +427,9 @@ parse_and_validate() {
         fi
     fi
 
-    # Swap size
-    if ! [[ "$BUILD_SWAP_SIZE" =~ ^[0-9]+$ ]] || [ "$BUILD_SWAP_SIZE" -lt 1 ]; then
+    # Swap size (value has G appended, validate the numeric part)
+    local swap_num="${BUILD_SWAP_SIZE%G}"
+    if ! [[ "$swap_num" =~ ^[0-9]+$ ]] || [ "$swap_num" -lt 1 ]; then
         errors+=("swap_size: must be an integer >= 1")
     fi
 
@@ -1074,7 +1075,7 @@ do_dry_run() {
     echo "  efi_size:          $BUILD_EFI_SIZE"
     echo "  boot_size:         $BUILD_BOOT_SIZE"
     echo "  root_size:         $BUILD_ROOT_SIZE"
-    echo "  swap_size:         ${BUILD_SWAP_SIZE}G"
+    echo "  swap_size:         ${BUILD_SWAP_SIZE}"
     echo "  default_hostname:  $BUILD_DEFAULT_HOSTNAME"
     echo "  output:            $BUILD_OUTPUT"
     if [ -n "$BUILD_POST_INSTALL" ]; then

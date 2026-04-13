@@ -42,6 +42,18 @@ TEMPLATED_DROPBEAR_SSH_KEY
 DBAUTHEOF
     chmod 600 $target/etc/dropbear/initramfs/authorized_keys
 
+    # Generate fresh dropbear host keys for this machine.
+    # The dropbear-initramfs hook should do this automatically during
+    # update-initramfs, but in a FAI chroot context the hook may not fire.
+    # Generating explicitly ensures the installed system always has unique keys.
+    mkdir -p $target/etc/dropbear/initramfs
+    for ktype in rsa ecdsa ed25519; do
+        keyfile="$target/etc/dropbear/initramfs/dropbear_${ktype}_host_key"
+        if [ ! -f "$keyfile" ]; then
+            $ROOTCMD dropbearkey -t "$ktype" -f "/etc/dropbear/initramfs/dropbear_${ktype}_host_key"
+        fi
+    done
+
     # Initramfs network config (static IP for pre-boot SSH access)
     # Format: IP=<client-ip>::<gateway>:<netmask>:<hostname>:<device>
     if [ -n "$THIS_IP" ]; then
