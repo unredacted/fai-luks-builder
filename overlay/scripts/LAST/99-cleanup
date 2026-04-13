@@ -1,0 +1,181 @@
+#! /bin/bash
+#
+# Remove all FAI install artifacts so the installed system looks like a
+# regular Debian install. Runs LAST in the LAST class (99 = after upstream's
+# 50-misc).
+#
+# SECURITY-CRITICAL: /var/lib/fai/config contains the templated config space
+# which includes plaintext SECRETS:
+#   - disk_config/LUKS_SERVER       -> LUKS passphrase
+#   - scripts/CUSTOM_SETUP/10-setup -> admin password hash, SSH public key
+#   - scripts/LUKS_SERVER/10-crypttab -> dropbear authorized SSH key
+# These MUST be removed before the installed system is exposed.
+
+# We deliberately don't use 'set -e' here -- this script is best-effort
+# cleanup and individual failures (e.g., a file already absent) shouldn't
+# abort the overall install. We track the worst exit code for the FAI
+# error handler instead, matching the pattern used by upstream scripts.
+error=0; trap 'error=$(($?>$error?$?:$error))' ERR
+
+# --- Remove FAI packages ---
+# fai-client (if installed) provides /etc/fai/, the FAI motd, and a cron job
+# for softupdate. We don't support softupdate on these turnkey installs.
+# || true on each because some may not be installed.
+$ROOTCMD apt-get purge -y \
+    fai-client fai-server fai-setup-storage fai-doc fai-nfsroot 2>/dev/null || true
+$ROOTCMD apt-get autoremove -y --purge 2>/dev/null || true
+
+# --- Remove FAI directories ---
+# /var/lib/fai/config is the BIG one -- it has all our secrets.
+rm -rf "$target/var/lib/fai"
+rm -rf "$target/etc/fai"
+rm -rf "$target/srv/fai"
+rm -rf "$target/var/log/fai"
+rm -rf "$target/tmp/fai"
+
+# --- Replace apt sources with modern deb822 format ---
+# Upstream LAST/50-misc writes /etc/apt/sources.list in legacy one-line
+# format without a Signed-By: directive, which produces "Missing Signed-By"
+# warnings on Debian trixie+. Also includes a (commented) FAI repo line
+# that may be uncommented under certain conditions.
+#
+# Replace with a proper deb822 .sources file matching what the standard
+# Debian installer produces, and empty out /etc/apt/sources.list.
+
+# Detect release codename for the sources file (fall back to trixie)
+release=$(awk -F= '/^VERSION_CODENAME=/{print $2}' "$target/etc/os-release" 2>/dev/null)
+[ -z "$release" ] && release=trixie
+
+cat > "$target/etc/apt/sources.list.d/debian.sources" << SOURCESEOF
+Types: deb
+URIs: http://deb.debian.org/debian
+Suites: ${release} ${release}-updates
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: http://security.debian.org/debian-security
+Suites: ${release}-security
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+SOURCESEOF
+
+# Empty the legacy sources.list (keep the file so apt doesn't complain)
+: > "$target/etc/apt/sources.list"
+
+# Remove any FAI repo files in either format and the FAI signing key
+rm -f "$target"/etc/apt/sources.list.d/*fai*.list
+rm -f "$target"/etc/apt/sources.list.d/*fai*.sources
+rm -f "$target"/etc/apt/sources.list.d/original-fai-archive.sources
+rm -f "$target"/etc/apt/trusted.gpg.d/fai-project*.gpg
+rm -f "$target"/etc/apt/keyrings/fai-project*
+
+# Fix any remaining .sources files (e.g. debian-backports.sources auto-generated
+# during apt repo migration) that reference deb.debian.org or security.debian.org
+# with an empty or missing Signed-By: directive. Apt treats "Signed-By:" with no
+# value the same as missing -- both produce the "Missing Signed-By" warning.
+for src in "$target"/etc/apt/sources.list.d/*.sources; do
+    [ -f "$src" ] || continue
+    grep -qE 'deb\.debian\.org|security\.debian\.org' "$src" || continue
+    if grep -qE '^Signed-By:[[:space:]]*$' "$src"; then
+        # Empty Signed-By: replace with Debian keyring path
+        sed -i 's|^Signed-By:[[:space:]]*$|Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg|' "$src"
+    elif ! grep -q '^Signed-By:' "$src"; then
+        # No Signed-By line at all: append one
+        echo 'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' >> "$src"
+    fi
+done
+
+# --- Remove FAI motd ---
+# Upstream FAIBASE/10-misc fcopies "Plan your installation, and FAI installs
+# your plan." Replace with an empty motd; users can customize as desired.
+: > "$target/etc/motd"
+
+# --- Remove FAI's apt force-confdef hook ---
+# Upstream hooks/instsoft.DEBIAN drops this in. It forces apt to always
+# accept the maintainer's config on conffile conflicts. Restore default
+# apt behavior on the running system.
+rm -f "$target/etc/apt/apt.conf.d/force_confdef"
+
+# --- Reset machine identity ---
+# Empty machine-id files cause systemd to generate a fresh, unique ID on
+# first boot. Without this, every installed host shares the same ID, which
+# breaks DHCP client identification, journal isolation, and other systemd
+# features that key off machine-id.
+: > "$target/etc/machine-id"
+[ -e "$target/var/lib/dbus/machine-id" ] && : > "$target/var/lib/dbus/machine-id"
+
+# --- Clear systemd journal (install-time logs) ---
+rm -rf "$target"/var/log/journal/* 2>/dev/null
+rm -rf "$target"/run/log/journal/* 2>/dev/null
+
+# --- Clear apt caches and lists ---
+$ROOTCMD apt-get clean
+rm -rf "$target"/var/lib/apt/lists/*
+mkdir -p "$target/var/lib/apt/lists/partial"
+
+# --- Clear install-time logs (keep directory structure for daemons) ---
+find "$target/var/log" -type f \( \
+    -name '*.log' -o -name '*.gz' -o -name '*.[0-9]' -o -name '*.old' \
+    \) -delete 2>/dev/null
+: > "$target/var/log/wtmp"
+: > "$target/var/log/btmp"
+[ -e "$target/var/log/lastlog" ] && : > "$target/var/log/lastlog"
+# /var/log/journal/ recreated above; touch the standard logs so daemons
+# don't error on first start
+: > "$target/var/log/auth.log"
+: > "$target/var/log/syslog"
+: > "$target/var/log/dpkg.log"
+
+# --- Clear DHCP leases ---
+rm -rf "$target"/var/lib/dhcp/* 2>/dev/null
+rm -rf "$target"/var/lib/dhcpcd/* 2>/dev/null
+
+# --- Clear /tmp, /var/tmp ---
+# Use find rather than rm -rf $target/tmp/* to handle hidden files cleanly
+find "$target/tmp" -mindepth 1 -delete 2>/dev/null
+find "$target/var/tmp" -mindepth 1 -delete 2>/dev/null
+
+# --- Clear shell history files ---
+rm -f "$target/root/.bash_history" \
+      "$target/root/.lesshst" \
+      "$target/root/.viminfo" \
+      "$target/root/.wget-hsts" \
+      "$target/root/.python_history" 2>/dev/null
+for h in "$target"/home/*/; do
+    [ -d "$h" ] || continue
+    rm -f "$h/.bash_history" "$h/.lesshst" "$h/.viminfo" \
+          "$h/.wget-hsts" "$h/.python_history" 2>/dev/null
+done
+
+# --- Clear cloud-init / debconf state we don't need ---
+# debconf cache files (postinst answers); regenerated as needed
+rm -f "$target"/var/cache/debconf/*-old 2>/dev/null
+
+# --- Verify boot-critical files survived cleanup ---
+for f in /etc/crypttab /etc/fstab /boot/grub/grub.cfg; do
+    if [ ! -f "$target$f" ]; then
+        echo "ERROR: $f missing after cleanup"
+        error=1
+    fi
+done
+
+# --- Verify SSH host keys exist (must survive for sshd to start) ---
+have_key=0
+for k in ssh_host_ed25519_key ssh_host_ecdsa_key ssh_host_rsa_key; do
+    [ -f "$target/etc/ssh/$k" ] && have_key=1
+done
+if [ "$have_key" -eq 0 ]; then
+    echo "WARNING: no SSH host keys present -- sshd will regenerate on first boot"
+fi
+
+# --- Verify dropbear initramfs keys still present (only if dropbear was set up) ---
+if [ -f "$target/etc/dropbear/initramfs/authorized_keys" ]; then
+    for k in dropbear_ed25519_host_key dropbear_ecdsa_host_key dropbear_rsa_host_key; do
+        [ -f "$target/etc/dropbear/initramfs/$k" ] || \
+            echo "WARNING: dropbear initramfs key $k missing"
+    done
+fi
+
+echo "Cleanup complete: removed FAI artifacts and install-time secrets from target"
+exit $error
