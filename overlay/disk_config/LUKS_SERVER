@@ -7,7 +7,7 @@ primary  /boot      TEMPLATED_BOOT_SIZE  ext4   rw,noatime
 primary  -          0-     -      -
 
 disk_config cryptsetup
-luks  -  disk1.3  -  -
+luks:"TEMPLATED_LUKS_PASSPHRASE"  -  disk1.3  -  -
 
 disk_config lvm
 vg  vg0  disk1.3

@@ -393,6 +393,10 @@ parse_and_validate() {
     # Required fields
     [ -z "$BUILD_LUKS_PASSPHRASE" ] && errors+=("luks_passphrase: required")
     [ ${#BUILD_LUKS_PASSPHRASE} -lt 8 ] 2>/dev/null && errors+=("luks_passphrase: minimum 8 characters")
+    # The passphrase gets embedded into disk_config as luks:"..." which doesn't
+    # allow double quotes or backslashes in the value.
+    [[ "$BUILD_LUKS_PASSPHRASE" == *'"'* ]] && errors+=("luks_passphrase: cannot contain double quotes")
+    [[ "$BUILD_LUKS_PASSPHRASE" == *'\'* ]] && errors+=("luks_passphrase: cannot contain backslashes")
 
     # Release codename
     if ! [[ "$BUILD_RELEASE" =~ ^[a-z]+$ ]]; then
@@ -794,11 +798,6 @@ assemble_config_space() {
     # ── Template replacements ──
     log_info "Running template replacements..."
 
-    # Write LUKS passphrase to a file (avoids shell quoting issues in hook script)
-    printf '%s' "$BUILD_LUKS_PASSPHRASE" > "$config_dir/.luks_passphrase"
-    chmod 600 "$config_dir/.luks_passphrase"
-    log_info "LUKS passphrase written to config space"
-
     # Derive arch class name (amd64 → AMD64, arm64 → ARM64)
     local arch_class
     arch_class="$(echo "$TARGET_ARCH" | tr '[:lower:]' '[:upper:]')"
@@ -817,6 +816,7 @@ assemble_config_space() {
     template_replace_all "TEMPLATED_EFI_SIZE"              "$BUILD_EFI_SIZE"              "$config_dir"
     template_replace_all "TEMPLATED_BOOT_SIZE"             "$BUILD_BOOT_SIZE"             "$config_dir"
     template_replace_all "TEMPLATED_ROOT_SIZE"             "$BUILD_ROOT_SIZE"             "$config_dir"
+    template_replace_all "TEMPLATED_LUKS_PASSPHRASE"       "$BUILD_LUKS_PASSPHRASE"       "$config_dir"
 
     # Multi-line replacements: host map, dropbear package, extra packages
 
