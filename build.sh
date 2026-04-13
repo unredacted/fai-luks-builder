@@ -396,7 +396,7 @@ parse_and_validate() {
     # The passphrase gets embedded into disk_config as luks:"..." which doesn't
     # allow double quotes or backslashes in the value.
     [[ "$BUILD_LUKS_PASSPHRASE" == *'"'* ]] && errors+=("luks_passphrase: cannot contain double quotes")
-    [[ "$BUILD_LUKS_PASSPHRASE" == *'\'* ]] && errors+=("luks_passphrase: cannot contain backslashes")
+    [[ "$BUILD_LUKS_PASSPHRASE" == *\\* ]] && errors+=("luks_passphrase: cannot contain backslashes")
 
     # Release codename
     if ! [[ "$BUILD_RELEASE" =~ ^[a-z]+$ ]]; then
